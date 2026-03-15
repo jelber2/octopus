@@ -291,3 +291,288 @@ pub fn begin_distance(first: &ContigRegion, second: &ContigRegion) -> Distance {
 pub fn end_distance(first: &ContigRegion, second: &ContigRegion) -> Distance {
     second.end() as Distance - first.end() as Distance
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(begin: u32, end: u32) -> ContigRegion {
+        ContigRegion::new(begin, end).unwrap()
+    }
+
+    // ── Construction ─────────────────────────────────────────────────────
+
+    #[test]
+    fn constructing_negative_region_is_error() {
+        assert!(ContigRegion::new(0, 0).is_ok());
+        assert!(ContigRegion::new(0, 1).is_ok());
+        assert!(ContigRegion::new(1, 0).is_err());
+        assert!(ContigRegion::new(5, 3).is_err());
+    }
+
+    // ── Ordering ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn ordering_is_by_begin_then_end() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+
+        assert_ne!(r1, r2);
+        assert!(r1 < r2);
+
+        assert_ne!(r2, r3);
+        assert!(r2 < r3);
+
+        assert_ne!(r1, r4);
+        assert!(r1 < r4);
+
+        assert_ne!(r2, r4);
+        assert!(r2 < r4);
+
+        assert_ne!(r3, r4);
+        assert!(r4 < r3);
+    }
+
+    // ── is_before ────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_before_is_consistent() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+        let r5 = r(2, 2);
+
+        assert!(!is_before(&r1, &r1));
+        assert!(!is_before(&r2, &r2));
+
+        assert!(is_before(&r1, &r2));
+        assert!(!is_before(&r2, &r1));
+
+        assert!(is_before(&r1, &r3));
+        assert!(!is_before(&r3, &r1));
+
+        assert!(is_before(&r1, &r4));
+        assert!(!is_before(&r4, &r1));
+
+        assert!(is_before(&r4, &r5));
+        assert!(!is_before(&r5, &r4));
+
+        assert!(!is_before(&r3, &r4));
+        assert!(!is_before(&r4, &r3));
+    }
+
+    // ── is_after ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_after_is_consistent() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+        let r5 = r(2, 2);
+
+        assert!(!is_after(&r1, &r1));
+        assert!(!is_after(&r2, &r2));
+
+        assert!(is_after(&r2, &r1));
+        assert!(!is_after(&r1, &r2));
+
+        assert!(is_after(&r3, &r1));
+        assert!(!is_after(&r1, &r3));
+
+        assert!(is_after(&r4, &r1));
+        assert!(!is_after(&r1, &r4));
+
+        assert!(is_after(&r5, &r2));
+        assert!(!is_after(&r2, &r5));
+
+        assert!(is_after(&r5, &r3));
+        assert!(!is_after(&r3, &r5));
+
+        assert!(!is_after(&r3, &r4));
+        assert!(!is_after(&r4, &r3));
+    }
+
+    // ── overlap_size ─────────────────────────────────────────────────────
+
+    #[test]
+    fn overlap_size_returns_number_of_overlapped_positions() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(0, 2);
+        let r4 = r(0, 4);
+
+        assert_eq!(overlap_size(&r1, &r1), 0);
+        assert_eq!(overlap_size(&r1, &r2), 0);
+        assert_eq!(overlap_size(&r1, &r3), 0);
+        assert_eq!(overlap_size(&r1, &r4), 0);
+        assert_eq!(overlap_size(&r2, &r1), 0);
+        assert_eq!(overlap_size(&r3, &r1), 0);
+        assert_eq!(overlap_size(&r4, &r1), 0);
+
+        assert_eq!(overlap_size(&r2, &r3), 1);
+        assert_eq!(overlap_size(&r3, &r2), 1);
+
+        assert_eq!(overlap_size(&r2, &r4), 1);
+        assert_eq!(overlap_size(&r4, &r2), 1);
+
+        assert_eq!(overlap_size(&r3, &r4), 2);
+        assert_eq!(overlap_size(&r4, &r3), 2);
+    }
+
+    // ── overlaps ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn overlaps_is_consistent() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+        let r5 = r(2, 2);
+
+        // every region overlaps itself (including empty ones)
+        assert!(overlaps(&r1, &r1));
+        assert!(overlaps(&r2, &r2));
+        assert!(overlaps(&r3, &r3));
+        assert!(overlaps(&r4, &r4));
+        assert!(overlaps(&r5, &r5));
+
+        assert!(overlaps(&r1, &r2));
+        assert!(overlaps(&r2, &r1));
+        assert!(!overlaps(&r1, &r3));
+        assert!(!overlaps(&r3, &r1));
+        assert!(overlaps(&r2, &r3));
+        assert!(overlaps(&r3, &r2));
+
+        assert!(overlaps(&r1, &r4));
+        assert!(overlaps(&r2, &r4));
+        assert!(overlaps(&r3, &r4));
+        assert!(overlaps(&r4, &r1));
+        assert!(overlaps(&r4, &r2));
+        assert!(overlaps(&r4, &r3));
+
+        assert!(!overlaps(&r1, &r5));
+        assert!(!overlaps(&r2, &r5));
+        assert!(!overlaps(&r3, &r5));
+        assert!(!overlaps(&r5, &r1));
+        assert!(!overlaps(&r5, &r2));
+        assert!(!overlaps(&r5, &r3));
+    }
+
+    // ── contains ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn contains_is_consistent() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+        let r5 = r(2, 2);
+
+        assert!(contains(&r1, &r1));
+        assert!(contains(&r2, &r2));
+        assert!(contains(&r3, &r3));
+        assert!(contains(&r4, &r4));
+        assert!(contains(&r5, &r5));
+
+        assert!(contains(&r2, &r1));
+        assert!(!contains(&r1, &r2));
+
+        assert!(contains(&r2, &r3));
+        assert!(!contains(&r3, &r2));
+
+        assert!(contains(&r4, &r1));
+        assert!(contains(&r4, &r2));
+        assert!(contains(&r4, &r3));
+        assert!(contains(&r4, &r5));
+        assert!(!contains(&r1, &r4));
+        assert!(!contains(&r2, &r4));
+        assert!(!contains(&r3, &r4));
+        assert!(!contains(&r5, &r4));
+    }
+
+    // ── are_adjacent ─────────────────────────────────────────────────────
+
+    #[test]
+    fn overlapping_empty_regions_are_adjacent() {
+        let r1 = r(0, 0);
+        let r2 = r(0, 1);
+        let r3 = r(1, 1);
+        let r4 = r(0, 2);
+        let r5 = r(2, 2);
+
+        // empty regions that overlap each other are adjacent
+        assert!(are_adjacent(&r1, &r1));
+        assert!(are_adjacent(&r3, &r3));
+        assert!(are_adjacent(&r5, &r5));
+
+        // non-empty regions are not self-adjacent
+        assert!(!are_adjacent(&r2, &r2));
+        assert!(!are_adjacent(&r4, &r4));
+    }
+
+    #[test]
+    fn are_adjacent_between_distinct_regions() {
+        let r1 = r(0, 5);
+        let r2 = r(5, 10);
+        let r3 = r(6, 10);
+        let r4 = r(0, 6);
+
+        assert!(are_adjacent(&r1, &r2));
+        assert!(are_adjacent(&r2, &r1));
+        assert!(!are_adjacent(&r1, &r3));
+        assert!(!are_adjacent(&r1, &r4));
+    }
+
+    // ── size and is_empty ─────────────────────────────────────────────────
+
+    #[test]
+    fn size_and_is_empty() {
+        assert_eq!(size(&r(0, 0)), 0);
+        assert!(is_empty(&r(0, 0)));
+        assert_eq!(size(&r(0, 1)), 1);
+        assert!(!is_empty(&r(0, 1)));
+        assert_eq!(size(&r(3, 10)), 7);
+    }
+
+    // ── inner_distance ────────────────────────────────────────────────────
+
+    #[test]
+    fn inner_distance_for_non_overlapping() {
+        let r1 = r(0, 5);
+        let r2 = r(8, 12);
+        assert_eq!(inner_distance(&r1, &r2), 3);
+        assert_eq!(inner_distance(&r2, &r1), -3);
+    }
+
+    #[test]
+    fn inner_distance_for_overlapping() {
+        let r1 = r(0, 10);
+        let r2 = r(5, 15);
+        assert_eq!(inner_distance(&r1, &r2), 0);
+    }
+
+    // ── head / tail regions ───────────────────────────────────────────────
+
+    #[test]
+    fn head_region_clips_to_region_end() {
+        let region = r(10, 20);
+        assert_eq!(head_region(&region, 5), r(10, 15));
+        assert_eq!(head_region(&region, 15), r(10, 20)); // clamped
+        assert_eq!(head_position(&region), r(10, 11));
+    }
+
+    #[test]
+    fn tail_region_clips_to_region_begin() {
+        let region = r(10, 20);
+        assert_eq!(tail_region(&region, 5),  r(15, 20));
+        // n=15 < end=20, so begin = end-n = 5 (not clamped to region.begin())
+        assert_eq!(tail_region(&region, 15), r(5, 20));
+        // n > end → clamp to 0
+        assert_eq!(tail_region(&region, 25), r(0, 20));
+        assert_eq!(tail_position(&region), r(19, 20));
+    }
+}

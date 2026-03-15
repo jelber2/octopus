@@ -351,6 +351,58 @@ pub fn cigar_to_string(cigar: &CigarString) -> String {
     cigar.iter().map(|op| op.to_string()).collect()
 }
 
+/// Copy a sub-range of `cigar` starting at `offset` positions (counting all operations) and
+/// spanning at most `size` positions.  This is equivalent to the C++
+/// `copy(cigar, offset, size)` with the default `CigarStringCopyPolicy::both` — every
+/// operation counts equally towards both the skip distance and the extraction length.
+pub fn copy_cigar(cigar: &CigarString, mut offset: CigarSize, mut size: CigarSize) -> CigarString {
+    let mut result: CigarString = Vec::new();
+    let mut iter = cigar.iter();
+
+    // Phase 1: skip operations until we reach the start of the window.
+    let start_op = loop {
+        match iter.next() {
+            None => return result,
+            Some(op) => {
+                if offset == 0 || offset < op.size() {
+                    break Some((op, offset));
+                }
+                offset -= op.size();
+            }
+        }
+    };
+
+    // Phase 2: emit the first (possibly partial) operation.
+    if let Some((first, off)) = start_op {
+        let remainder = first.size() - off;
+        if remainder >= size {
+            if size > 0 {
+                result.push(CigarOperation::new(size, first.flag()));
+            }
+            return result;
+        }
+        if remainder > 0 {
+            result.push(CigarOperation::new(remainder, first.flag()));
+        }
+        size -= remainder;
+    }
+
+    // Phase 3: emit whole or partial remaining operations.
+    for op in iter {
+        if size == 0 {
+            break;
+        }
+        if size >= op.size() {
+            result.push(*op);
+            size -= op.size();
+        } else {
+            result.push(CigarOperation::new(size, op.flag()));
+            return result;
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +637,98 @@ mod tests {
         assert_eq!(clipped_begin(&cigar, 100), 95);
         let cigar2 = parse_cigar("50M3S").unwrap();
         assert_eq!(clipped_end(&cigar2, 200), 203);
+    }
+
+    // ── copy_cigar — ported from cigar_string_tests.cpp ──────────────────
+
+    #[test]
+    fn cigars_with_same_ordered_ops_are_equal() {
+        let empty = parse_cigar("").unwrap();
+        let m10   = parse_cigar("10M").unwrap();
+        let eq10  = parse_cigar("10=").unwrap();
+        assert_eq!(empty, empty);
+        assert_eq!(m10,   m10);
+        assert_eq!(eq10,  eq10);
+        assert_ne!(empty, m10);
+        assert_ne!(empty, eq10);
+        assert_ne!(m10,   eq10);
+    }
+
+    #[test]
+    fn parse_cigar_roundtrip() {
+        let empty = parse_cigar("").unwrap();
+        assert_eq!(empty, vec![]);
+        let m10 = parse_cigar("10M").unwrap();
+        assert_eq!(m10, vec![op(10, CigarFlag::AlignmentMatch)]);
+        let i5 = parse_cigar("5I").unwrap();
+        assert_eq!(i5, vec![op(5, CigarFlag::Insertion)]);
+    }
+
+    #[test]
+    fn is_valid_cigar_flag_detection() {
+        assert!(!is_valid_cigar(&parse_cigar("").unwrap()));
+        assert!(is_valid_cigar(&parse_cigar("10M").unwrap()));
+        assert!(is_valid_cigar(&parse_cigar("5I10M").unwrap()));
+        assert!(is_valid_cigar(&parse_cigar("10M10M").unwrap()));
+        assert!(is_valid_cigar(&parse_cigar("5S1D19M9I2I4D28X1=1D6S10H").unwrap()));
+        assert!(parse_cigar("1T").is_err());
+    }
+
+    #[test]
+    fn copy_cigar_from_middle() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 3, 10), parse_cigar("2M1D7M").unwrap());
+        assert_eq!(copy_cigar(&cigar, 3, 15), parse_cigar("2M1D10M2I").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_from_start() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 0, 10), parse_cigar("5M1D4M").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_full_span_returns_original() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 0, 50), cigar);
+    }
+
+    #[test]
+    fn copy_cigar_past_insertions() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 20, 10), parse_cigar("3M").unwrap());
+        assert_eq!(copy_cigar(&cigar, 20, 3),  parse_cigar("3M").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_beyond_end_returns_empty() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 24, 10), parse_cigar("").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_spanning_insertion_block() {
+        let cigar = parse_cigar("5M1D10M3I4M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 16, 7), parse_cigar("3I4M").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_empty_source() {
+        let empty = parse_cigar("").unwrap();
+        assert_eq!(copy_cigar(&empty, 0, 10), parse_cigar("").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_zero_size_returns_empty() {
+        let cigar = parse_cigar("10M5I10M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 0, 0), parse_cigar("").unwrap());
+    }
+
+    #[test]
+    fn copy_cigar_single_op() {
+        let cigar = parse_cigar("20M").unwrap();
+        assert_eq!(copy_cigar(&cigar, 5, 10), parse_cigar("10M").unwrap());
+        assert_eq!(copy_cigar(&cigar, 0, 20),  cigar);
+        assert_eq!(copy_cigar(&cigar, 15, 10), parse_cigar("5M").unwrap());
     }
 }
