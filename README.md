@@ -8,6 +8,8 @@
 [![Anaconda-Server Badge](https://anaconda.org/bioconda/octopus/badges/installer/conda.svg)](https://conda.anaconda.org/bioconda)
 [![Docker Image Version (latest semver)](https://img.shields.io/docker/v/dancooke/octopus?label=docker)](https://hub.docker.com/r/dancooke/octopus)
 
+# main branch is a fork of octopus in Rust
+
 Octopus is a mapping-based variant caller that implements several calling models within a unified haplotype-aware framework. Octopus takes inspiration from particle filtering by constructing a tree of haplotypes and dynamically pruning and extending the tree based on haplotype posterior probabilities in a sequential manner. This allows octopus to implicitly consider all possible haplotypes at a given loci in reasonable time.
 
 There are currently six calling models available:
@@ -26,10 +28,8 @@ Octopus calls SNVs, small-medium sized indels, and small complex rearrangements 
 Install Octopus:
 
 ```shell
-$ git clone https://github.com/luntergroup/octopus.git
-$ octopus/scripts/install.py --dependencies --forests
-$ echo 'export PATH='$(pwd)'/octopus/bin:$PATH' >> ~/.bash_profile
-$ source ~/.bash_profile
+$ git clone https://github.com/jelber2/octopus.git
+$ cargo build --release
 ```
 
 Call some variants:
@@ -53,7 +53,7 @@ Contributions are very welcome! Please consult the [contribution guidelines](CON
 
 ## Authors
 
-Daniel Cooke and Gerton Lunter
+Daniel Cooke and Gerton Lunter, Replit Agent 4 and Jean P. Elbers for octopus Rust rewrite
 
 ## Citing
 
