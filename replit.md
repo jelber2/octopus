@@ -9,8 +9,29 @@ Full conversion of the **Octopus** bioinformatics variant caller from C++ to Rus
 
 ## Build Status
 
-**Clean build** — zero errors, only expected "unused code" warnings (~461).
+**Clean build** — zero errors, only expected "unused code" warnings.
 Last verified: 2026-03-15
+
+## CLI Argument Parsing (`rust_src/main.rs`)
+
+`main.rs` implements the full Octopus CLI via `clap` (derive API), matching all
+argument groups from the original `src/config/option_parser.cpp`.
+
+| Group | Key flags |
+|---|---|
+| General | `-R/--reference` (required), `-I/--reads` or `-i/--reads-file` (one required), `-T/--regions`, `-t/--regions-file`, `-K/--skip-regions`, `-o/--output`, `-S/--samples`, `--pedigree`, `--threads` (`--tentacles`), `--fast`, `--very-fast`, `--debug`, `--trace` |
+| Read preprocessing | `--min-mapping-quality` (5), `--good-base-quality` (20), `--min-good-bases` (20), `--max-read-length` (10000), `--downsample-above` (1000), `--downsample-target` (500) |
+| Variant discovery | `--variant-discovery-mode` (illumina), `--min-pileup-base-quality` (20), `--max-variant-size` (2000), `--kmer-sizes` (10 15 20), `--source-candidates` |
+| Variant calling | `-C/--caller` (population), `-P/--organism-ploidy` (2), `-z/--snp-heterozygosity` (0.001), `-y/--indel-heterozygosity` (0.0001), `--min-variant-posterior` (0.1), `--sequence-error-model`, `--min-phase-score` (5.0) |
+| Cancer | `-N/--normal-samples`, `--somatic-snv-prior`, `--somatic-indel-prior`, `--min-credible-somatic-frequency`, `--somatics-only` |
+| Trio | `-M/--maternal-sample`, `-F/--paternal-sample`, `--denovo-snv-prior`, `--denovo-indel-prior`, `--denovos-only` |
+| Polyclone | `--max-clones` (5), `--min-clone-frequency`, `--clone-prior` |
+| Cell | `--max-copy-loss`, `--max-copy-gain`, `--dropout-concentration` |
+
+`--caller` is validated at parse time against the 6 model names.
+`validate_args()` checks all input files exist and flag conflicts (`--fast` + `--very-fast`,
+downsampler target ≥ above, etc.) and emits caller-specific errors (cancer requires
+`--normal-samples`; trio requires both `--maternal-sample` and `--paternal-sample`).
 
 ## Architecture
 
