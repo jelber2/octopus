@@ -350,3 +350,240 @@ pub fn collapse_matches(cigar: &CigarString) -> CigarString {
 pub fn cigar_to_string(cigar: &CigarString) -> String {
     cigar.iter().map(|op| op.to_string()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(size: u32, flag: CigarFlag) -> CigarOperation {
+        CigarOperation::new(size, flag)
+    }
+
+    #[test]
+    fn flag_from_char_all_valid() {
+        assert_eq!(CigarFlag::from_char('M'), Some(CigarFlag::AlignmentMatch));
+        assert_eq!(CigarFlag::from_char('='), Some(CigarFlag::SequenceMatch));
+        assert_eq!(CigarFlag::from_char('X'), Some(CigarFlag::Substitution));
+        assert_eq!(CigarFlag::from_char('I'), Some(CigarFlag::Insertion));
+        assert_eq!(CigarFlag::from_char('D'), Some(CigarFlag::Deletion));
+        assert_eq!(CigarFlag::from_char('S'), Some(CigarFlag::SoftClipped));
+        assert_eq!(CigarFlag::from_char('H'), Some(CigarFlag::HardClipped));
+        assert_eq!(CigarFlag::from_char('P'), Some(CigarFlag::Padding));
+        assert_eq!(CigarFlag::from_char('N'), Some(CigarFlag::Skipped));
+    }
+
+    #[test]
+    fn flag_from_char_invalid_is_none() {
+        assert_eq!(CigarFlag::from_char('Z'), None);
+        assert_eq!(CigarFlag::from_char(' '), None);
+    }
+
+    #[test]
+    fn flag_as_char_round_trips() {
+        for (c, flag) in [('M', CigarFlag::AlignmentMatch), ('I', CigarFlag::Insertion),
+                          ('D', CigarFlag::Deletion), ('S', CigarFlag::SoftClipped),
+                          ('H', CigarFlag::HardClipped)] {
+            assert_eq!(flag.as_char(), c);
+        }
+    }
+
+    #[test]
+    fn operation_display() {
+        assert_eq!(op(36, CigarFlag::AlignmentMatch).to_string(), "36M");
+        assert_eq!(op(5, CigarFlag::Insertion).to_string(), "5I");
+        assert_eq!(op(3, CigarFlag::Deletion).to_string(), "3D");
+    }
+
+    #[test]
+    fn parse_simple_cigar() {
+        let cigar = parse_cigar("36M").unwrap();
+        assert_eq!(cigar.len(), 1);
+        assert_eq!(cigar[0].flag(), CigarFlag::AlignmentMatch);
+        assert_eq!(cigar[0].size(), 36);
+    }
+
+    #[test]
+    fn parse_complex_cigar() {
+        let cigar = parse_cigar("10S80M5I2D3S").unwrap();
+        assert_eq!(cigar.len(), 5);
+        assert_eq!(cigar[0], op(10, CigarFlag::SoftClipped));
+        assert_eq!(cigar[1], op(80, CigarFlag::AlignmentMatch));
+        assert_eq!(cigar[2], op(5, CigarFlag::Insertion));
+        assert_eq!(cigar[3], op(2, CigarFlag::Deletion));
+        assert_eq!(cigar[4], op(3, CigarFlag::SoftClipped));
+    }
+
+    #[test]
+    fn parse_cigar_invalid_op_errors() {
+        assert!(parse_cigar("10Z").is_err());
+    }
+
+    #[test]
+    fn parse_cigar_trailing_digits_errors() {
+        assert!(parse_cigar("10M5").is_err());
+    }
+
+    #[test]
+    fn cigar_to_string_round_trip() {
+        let original = "5S36M2I40M5S";
+        let cigar = parse_cigar(original).unwrap();
+        assert_eq!(cigar_to_string(&cigar), original);
+    }
+
+    #[test]
+    fn is_valid_cigar_checks() {
+        let valid = parse_cigar("10M5I10M").unwrap();
+        assert!(is_valid_cigar(&valid));
+        let with_zero = vec![op(0, CigarFlag::AlignmentMatch)];
+        assert!(!is_valid_cigar(&with_zero));
+        assert!(!is_valid_cigar(&vec![]));
+    }
+
+    #[test]
+    fn is_minimal_no_consecutive_same_flags() {
+        let minimal = parse_cigar("10M5I10M").unwrap();
+        assert!(is_minimal(&minimal));
+        let non_minimal = vec![op(10, CigarFlag::AlignmentMatch), op(5, CigarFlag::AlignmentMatch)];
+        assert!(!is_minimal(&non_minimal));
+    }
+
+    #[test]
+    fn soft_clip_detection() {
+        let front_clipped = parse_cigar("5S50M").unwrap();
+        assert!(is_front_soft_clipped(&front_clipped));
+        assert!(!is_back_soft_clipped(&front_clipped));
+        assert!(is_soft_clipped(&front_clipped));
+
+        let back_clipped = parse_cigar("50M5S").unwrap();
+        assert!(!is_front_soft_clipped(&back_clipped));
+        assert!(is_back_soft_clipped(&back_clipped));
+
+        let not_clipped = parse_cigar("50M").unwrap();
+        assert!(!is_soft_clipped(&not_clipped));
+    }
+
+    #[test]
+    fn get_soft_clipped_sizes_both_ends() {
+        let cigar = parse_cigar("3S50M7S").unwrap();
+        assert_eq!(get_soft_clipped_sizes(&cigar), (3, 7));
+    }
+
+    #[test]
+    fn get_soft_clipped_sizes_no_clipping() {
+        let cigar = parse_cigar("50M").unwrap();
+        assert_eq!(get_soft_clipped_sizes(&cigar), (0, 0));
+    }
+
+    #[test]
+    fn advances_reference_and_sequence() {
+        assert!(advances_reference_flag(CigarFlag::AlignmentMatch));
+        assert!(advances_reference_flag(CigarFlag::Deletion));
+        assert!(!advances_reference_flag(CigarFlag::Insertion));
+        assert!(!advances_reference_flag(CigarFlag::HardClipped));
+
+        assert!(advances_sequence_flag(CigarFlag::AlignmentMatch));
+        assert!(advances_sequence_flag(CigarFlag::Insertion));
+        assert!(!advances_sequence_flag(CigarFlag::Deletion));
+        assert!(!advances_sequence_flag(CigarFlag::HardClipped));
+    }
+
+    #[test]
+    fn classification_predicates() {
+        assert!(is_match_flag(CigarFlag::AlignmentMatch));
+        assert!(is_match_flag(CigarFlag::SequenceMatch));
+        assert!(!is_match_flag(CigarFlag::Substitution));
+
+        assert!(is_insertion_flag(CigarFlag::Insertion));
+        assert!(!is_insertion_flag(CigarFlag::Deletion));
+
+        assert!(is_deletion_flag(CigarFlag::Deletion));
+        assert!(!is_deletion_flag(CigarFlag::Insertion));
+
+        assert!(is_indel_flag(CigarFlag::Insertion));
+        assert!(is_indel_flag(CigarFlag::Deletion));
+        assert!(!is_indel_flag(CigarFlag::AlignmentMatch));
+
+        assert!(is_clipping_flag(CigarFlag::SoftClipped));
+        assert!(is_clipping_flag(CigarFlag::HardClipped));
+        assert!(!is_clipping_flag(CigarFlag::AlignmentMatch));
+    }
+
+    #[test]
+    fn has_indel_detection() {
+        let with_indel = parse_cigar("10M3I10M").unwrap();
+        assert!(has_indel(&with_indel));
+        let without_indel = parse_cigar("50M").unwrap();
+        assert!(!has_indel(&without_indel));
+    }
+
+    #[test]
+    fn reference_and_sequence_sizes() {
+        // advances_reference: M, =, X, D, S, N (but NOT I, H, P)
+        // advances_sequence:  M, =, X, I, S, P, N (but NOT D, H)
+        // 5S10M3I2D10M5H
+        //   ref:  5(S)+10(M)+0(I)+2(D)+10(M)+0(H) = 27
+        //   seq:  5(S)+10(M)+3(I)+0(D)+10(M)+0(H) = 28
+        let cigar = parse_cigar("5S10M3I2D10M5H").unwrap();
+        assert_eq!(reference_size(&cigar), 27);
+        assert_eq!(sequence_size(&cigar), 28);
+    }
+
+    #[test]
+    fn sum_matches_counts_m_and_eq_only() {
+        let cigar = parse_cigar("10M5I10M").unwrap();
+        assert_eq!(sum_matches(&cigar), 20);
+    }
+
+    #[test]
+    fn sum_indel_sizes_net() {
+        let cigar = parse_cigar("10M5I2D10M").unwrap();
+        assert_eq!(sum_indel_sizes(&cigar), 3);
+    }
+
+    #[test]
+    fn collapse_matches_merges_match_and_substitution() {
+        let cigar = vec![
+            op(10, CigarFlag::AlignmentMatch),
+            op(3, CigarFlag::Substitution),
+            op(5, CigarFlag::SequenceMatch),
+        ];
+        let collapsed = collapse_matches(&cigar);
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].flag(), CigarFlag::AlignmentMatch);
+        assert_eq!(collapsed[0].size(), 18);
+    }
+
+    #[test]
+    fn collapse_matches_preserves_non_match_ops() {
+        let cigar = parse_cigar("10M5I10M").unwrap();
+        let collapsed = collapse_matches(&cigar);
+        assert_eq!(collapsed.len(), 3);
+        assert_eq!(collapsed[1].flag(), CigarFlag::Insertion);
+    }
+
+    #[test]
+    fn decompose_expands_each_operation() {
+        let cigar = parse_cigar("3M2I").unwrap();
+        let flags = decompose(&cigar);
+        assert_eq!(flags.len(), 5);
+        assert_eq!(flags[0], CigarFlag::AlignmentMatch);
+        assert_eq!(flags[3], CigarFlag::Insertion);
+    }
+
+    #[test]
+    fn increment_and_decrement_size() {
+        let mut op_m = op(10, CigarFlag::AlignmentMatch);
+        increment_size(&mut op_m, 5);
+        assert_eq!(op_m.size(), 15);
+        decrement_size(&mut op_m, 3);
+        assert_eq!(op_m.size(), 12);
+    }
+
+    #[test]
+    fn clipped_begin_and_end() {
+        let cigar = parse_cigar("5S50M").unwrap();
+        assert_eq!(clipped_begin(&cigar, 100), 95);
+        let cigar2 = parse_cigar("50M3S").unwrap();
+        assert_eq!(clipped_end(&cigar2, 200), 203);
+    }
+}

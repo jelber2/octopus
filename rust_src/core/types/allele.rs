@@ -127,3 +127,143 @@ pub fn is_simple_deletion(allele: &Allele) -> bool {
 pub fn demote(allele: Allele) -> ContigAllele {
     ContigAllele { region: *allele.region.contig_region(), sequence: allele.sequence }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn genomic(contig: &str, begin: u32, end: u32) -> GenomicRegion {
+        GenomicRegion::new(contig, begin, end).unwrap()
+    }
+
+    #[test]
+    fn allele_from_parts() {
+        let a = Allele::from_parts("chr1", 100, b"ACG".to_vec()).unwrap();
+        assert_eq!(a.mapped_region().contig_name(), "chr1");
+        assert_eq!(a.mapped_region().begin(), 100);
+        assert_eq!(a.mapped_region().end(), 103);
+        assert_eq!(a.sequence(), b"ACG");
+        assert_eq!(a.sequence_size(), 3);
+        assert!(!a.is_sequence_empty());
+    }
+
+    #[test]
+    fn allele_from_parts_empty_sequence() {
+        let a = Allele::from_parts("chrX", 50, vec![]).unwrap();
+        assert_eq!(a.mapped_region().begin(), 50);
+        assert_eq!(a.mapped_region().end(), 50);
+        assert!(a.is_sequence_empty());
+    }
+
+    #[test]
+    fn contig_allele_from_position() {
+        let ca = ContigAllele::from_position(200, b"TTAG".to_vec()).unwrap();
+        assert_eq!(ca.mapped_region().begin(), 200);
+        assert_eq!(ca.mapped_region().end(), 204);
+        assert_eq!(ca.sequence_size(), 4);
+    }
+
+    #[test]
+    fn is_insertion_allele_sequence_longer_than_region() {
+        let region = genomic("chr1", 100, 100);
+        let a = Allele::new(region, b"ACG".to_vec());
+        assert!(is_insertion_allele(&a));
+        assert!(!is_deletion_allele(&a));
+        assert!(is_indel_allele(&a));
+    }
+
+    #[test]
+    fn is_deletion_allele_sequence_shorter_than_region() {
+        let region = genomic("chr1", 100, 104);
+        let a = Allele::new(region, vec![]);
+        assert!(is_deletion_allele(&a));
+        assert!(!is_insertion_allele(&a));
+        assert!(is_indel_allele(&a));
+    }
+
+    #[test]
+    fn substitution_allele_is_not_indel() {
+        let region = genomic("chr1", 100, 101);
+        let a = Allele::new(region, b"T".to_vec());
+        assert!(!is_indel_allele(&a));
+        assert!(!is_insertion_allele(&a));
+        assert!(!is_deletion_allele(&a));
+    }
+
+    #[test]
+    fn simple_insertion_empty_region_with_sequence() {
+        let region = genomic("chr1", 100, 100);
+        let a = Allele::new(region, b"ACG".to_vec());
+        assert!(is_simple_insertion(&a));
+    }
+
+    #[test]
+    fn not_simple_insertion_when_region_nonempty() {
+        let region = genomic("chr1", 100, 101);
+        let a = Allele::new(region, b"ACGT".to_vec());
+        assert!(!is_simple_insertion(&a));
+    }
+
+    #[test]
+    fn simple_deletion_nonempty_region_empty_sequence() {
+        let region = genomic("chr1", 100, 105);
+        let a = Allele::new(region, vec![]);
+        assert!(is_simple_deletion(&a));
+    }
+
+    #[test]
+    fn not_simple_deletion_when_sequence_nonempty() {
+        let region = genomic("chr1", 100, 105);
+        let a = Allele::new(region, b"A".to_vec());
+        assert!(!is_simple_deletion(&a));
+    }
+
+    #[test]
+    fn allele_ordering_by_region_then_sequence() {
+        let a1 = Allele::from_parts("chr1", 100, b"A".to_vec()).unwrap();
+        let a2 = Allele::from_parts("chr1", 100, b"T".to_vec()).unwrap();
+        let a3 = Allele::from_parts("chr1", 200, b"A".to_vec()).unwrap();
+        assert!(a1 < a2);
+        assert!(a1 < a3);
+    }
+
+    #[test]
+    fn allele_ordering_different_contigs_is_none() {
+        let a1 = Allele::from_parts("chr1", 100, b"A".to_vec()).unwrap();
+        let a2 = Allele::from_parts("chr2", 100, b"A".to_vec()).unwrap();
+        assert_eq!(a1.partial_cmp(&a2), None);
+    }
+
+    #[test]
+    fn contig_allele_ordering() {
+        let ca1 = ContigAllele::from_position(100, b"A".to_vec()).unwrap();
+        let ca2 = ContigAllele::from_position(200, b"A".to_vec()).unwrap();
+        assert!(ca1 < ca2);
+    }
+
+    #[test]
+    fn allele_equality() {
+        let a1 = Allele::from_parts("chr1", 100, b"ACG".to_vec()).unwrap();
+        let a2 = Allele::from_parts("chr1", 100, b"ACG".to_vec()).unwrap();
+        let a3 = Allele::from_parts("chr1", 100, b"ACT".to_vec()).unwrap();
+        assert_eq!(a1, a2);
+        assert_ne!(a1, a3);
+    }
+
+    #[test]
+    fn demote_strips_contig_name() {
+        let a = Allele::from_parts("chr1", 100, b"ACG".to_vec()).unwrap();
+        let ca = demote(a);
+        assert_eq!(ca.mapped_region().begin(), 100);
+        assert_eq!(ca.mapped_region().end(), 103);
+        assert_eq!(ca.sequence(), b"ACG");
+    }
+
+    #[test]
+    fn allele_display() {
+        let a = Allele::from_parts("chr1", 10, b"AT".to_vec()).unwrap();
+        let s = a.to_string();
+        assert!(s.contains("AT"));
+        assert!(s.contains("chr1"));
+    }
+}

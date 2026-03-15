@@ -283,3 +283,264 @@ pub fn end_distance(first: &GenomicRegion, second: &GenomicRegion) -> Result<Dis
     check_same_contig(first, second)?;
     Ok(contig_region::end_distance(first.contig_region(), second.contig_region()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(contig: &str, begin: u32, end: u32) -> GenomicRegion {
+        GenomicRegion::new(contig, begin, end).unwrap()
+    }
+
+    #[test]
+    fn new_valid_region() {
+        let region = r("chr1", 100, 200);
+        assert_eq!(region.contig_name(), "chr1");
+        assert_eq!(region.begin(), 100);
+        assert_eq!(region.end(), 200);
+    }
+
+    #[test]
+    fn new_zero_length_region_is_ok() {
+        let region = r("chr1", 50, 50);
+        assert_eq!(region.begin(), 50);
+        assert_eq!(region.end(), 50);
+        assert!(is_empty(&region));
+    }
+
+    #[test]
+    fn new_invalid_region_returns_err() {
+        assert!(GenomicRegion::new("chr1", 200, 100).is_err());
+    }
+
+    #[test]
+    fn display_format() {
+        let region = r("chr1", 100, 200);
+        assert_eq!(region.to_string(), "chr1:100-200");
+    }
+
+    #[test]
+    fn size_is_correct() {
+        assert_eq!(size(&r("chr1", 100, 200)), 100);
+        assert_eq!(size(&r("chrX", 0, 0)), 0);
+        assert_eq!(size(&r("chr2", 500, 501)), 1);
+    }
+
+    #[test]
+    fn is_position_single_base() {
+        assert!(is_position(&r("chr1", 10, 11)));
+        assert!(!is_position(&r("chr1", 10, 12)));
+        assert!(!is_position(&r("chr1", 10, 10)));
+    }
+
+    #[test]
+    fn overlaps_same_contig() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 150, 250);
+        let c = r("chr1", 200, 300);
+        let d = r("chr1", 300, 400);
+        assert!(overlaps(&a, &b));
+        assert!(!overlaps(&a, &c));
+        assert!(!overlaps(&a, &d));
+    }
+
+    #[test]
+    fn overlaps_empty_regions_at_boundary() {
+        let point = r("chr1", 100, 100);
+        let spanning = r("chr1", 50, 150);
+        assert!(overlaps(&point, &spanning));
+    }
+
+    #[test]
+    fn overlaps_different_contig_returns_false() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr2", 100, 200);
+        assert!(!overlaps(&a, &b));
+        assert!(!a.overlaps(&b));
+    }
+
+    #[test]
+    fn contains_correct() {
+        let outer = r("chr1", 100, 300);
+        let inner = r("chr1", 150, 250);
+        let partial = r("chr1", 50, 150);
+        assert!(contains(&outer, &inner));
+        assert!(outer.contains_region(&inner));
+        assert!(!contains(&outer, &partial));
+        assert!(!contains(&inner, &outer));
+    }
+
+    #[test]
+    fn is_same_contig_check() {
+        assert!(is_same_contig(&r("chr1", 0, 10), &r("chr1", 5, 15)));
+        assert!(!is_same_contig(&r("chr1", 0, 10), &r("chr2", 0, 10)));
+    }
+
+    #[test]
+    fn is_before_and_after() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 200, 300);
+        let c = r("chr1", 50, 99);
+        assert!(is_before(&a, &b).unwrap());
+        assert!(is_after(&b, &a).unwrap());
+        assert!(is_before(&c, &a).unwrap());
+    }
+
+    #[test]
+    fn before_after_different_contig_errors() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr2", 300, 400);
+        assert!(is_before(&a, &b).is_err());
+        assert!(is_after(&a, &b).is_err());
+    }
+
+    #[test]
+    fn are_adjacent_regions() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 200, 300);
+        let c = r("chr1", 201, 300);
+        assert!(are_adjacent(&a, &b));
+        assert!(!are_adjacent(&a, &c));
+        assert!(!are_adjacent(&r("chr1", 0, 10), &r("chr2", 10, 20)));
+    }
+
+    #[test]
+    fn overlap_size_computed() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 150, 250);
+        assert_eq!(overlap_size(&a, &b), 50);
+        let non_overlapping = r("chr1", 300, 400);
+        assert!(overlap_size(&a, &non_overlapping) <= 0);
+    }
+
+    #[test]
+    fn encompassing_region_spans_both() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 150, 300);
+        let enc = encompassing_region(&a, &b).unwrap();
+        assert_eq!(enc.begin(), 100);
+        assert_eq!(enc.end(), 300);
+    }
+
+    #[test]
+    fn encompassing_region_different_contigs_errors() {
+        assert!(encompassing_region(&r("chr1", 0, 10), &r("chr2", 0, 10)).is_err());
+    }
+
+    #[test]
+    fn overlapped_region_intersection() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 150, 250);
+        let ov = overlapped_region(&a, &b).unwrap();
+        assert_eq!(ov.begin(), 150);
+        assert_eq!(ov.end(), 200);
+    }
+
+    #[test]
+    fn overlapped_region_no_overlap_returns_none() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 300, 400);
+        assert!(overlapped_region(&a, &b).is_none());
+    }
+
+    #[test]
+    fn intervening_region_between_non_adjacent() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 250, 350);
+        let iv = intervening_region(&a, &b).unwrap();
+        assert_eq!(iv.begin(), 200);
+        assert_eq!(iv.end(), 250);
+    }
+
+    #[test]
+    fn intervening_region_adjacent_is_empty_region() {
+        // Adjacent regions [100,200) and [200,300) yield an empty intervening region at
+        // position 200, not None — the gap exists but has zero size.
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 200, 300);
+        let iv = intervening_region(&a, &b);
+        assert!(iv.is_some());
+        let iv = iv.unwrap();
+        assert_eq!(iv.begin(), 200);
+        assert_eq!(iv.end(), 200);
+        assert!(is_empty(&iv));
+    }
+
+    #[test]
+    fn shift_positive_and_negative() {
+        let region = r("chr1", 100, 200);
+        let shifted = shift(&region, 50).unwrap();
+        assert_eq!(shifted.begin(), 150);
+        assert_eq!(shifted.end(), 250);
+        let shifted_back = shift(&region, -50).unwrap();
+        assert_eq!(shifted_back.begin(), 50);
+        assert_eq!(shifted_back.end(), 150);
+    }
+
+    #[test]
+    fn shift_past_start_errors() {
+        let region = r("chr1", 10, 20);
+        assert!(shift(&region, -50).is_err());
+    }
+
+    #[test]
+    fn expand_grows_both_sides() {
+        let region = r("chr1", 100, 200);
+        let expanded = expand(&region, 20).unwrap();
+        assert_eq!(expanded.begin(), 80);
+        assert_eq!(expanded.end(), 220);
+    }
+
+    #[test]
+    fn head_and_tail_regions() {
+        let region = r("chr1", 100, 200);
+        let h = head_region(&region, 10);
+        assert_eq!(h.begin(), 100);
+        assert_eq!(h.end(), 110);
+        let t = tail_region(&region, 10);
+        assert_eq!(t.begin(), 190);
+        assert_eq!(t.end(), 200);
+    }
+
+    #[test]
+    fn inner_and_outer_distance() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 250, 350);
+        assert_eq!(inner_distance(&a, &b).unwrap(), 50);
+        let overlapping = r("chr1", 150, 250);
+        assert_eq!(inner_distance(&a, &overlapping).unwrap(), 0);
+    }
+
+    #[test]
+    fn partial_order_same_contig() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 200, 300);
+        assert!(a < b);
+        assert!(b > a);
+    }
+
+    #[test]
+    fn partial_order_different_contig_is_none() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr2", 100, 200);
+        assert_eq!(a.partial_cmp(&b), None);
+    }
+
+    #[test]
+    fn equality() {
+        let a = r("chr1", 100, 200);
+        let b = r("chr1", 100, 200);
+        let c = r("chr1", 100, 201);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn left_and_right_overhang() {
+        let a = r("chr1", 100, 300);
+        let b = r("chr1", 150, 350);
+        assert_eq!(left_overhang_size(&a, &b), 50);
+        assert_eq!(right_overhang_size(&a, &b), 0);
+        assert_eq!(right_overhang_size(&b, &a), 50);
+    }
+}

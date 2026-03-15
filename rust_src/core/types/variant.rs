@@ -157,3 +157,190 @@ pub fn split_mnv(variant: &Variant) -> Vec<Variant> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snv(contig: &str, pos: u32, r: u8, a: u8) -> Variant {
+        Variant::from_parts(contig, pos, vec![r], vec![a]).unwrap()
+    }
+
+    fn indel(contig: &str, pos: u32, r: &[u8], a: &[u8]) -> Variant {
+        Variant::from_parts(contig, pos, r.to_vec(), a.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn from_parts_snv() {
+        let v = snv("chr1", 100, b'A', b'T');
+        assert_eq!(v.mapped_region().contig_name(), "chr1");
+        assert_eq!(v.mapped_region().begin(), 100);
+        assert_eq!(v.mapped_region().end(), 101);
+        assert_eq!(v.ref_sequence(), b"A");
+        assert_eq!(v.alt_sequence(), b"T");
+    }
+
+    #[test]
+    fn from_parts_insertion() {
+        let v = Variant::from_parts("chr1", 100, vec![], b"ACGT".to_vec()).unwrap();
+        assert_eq!(v.ref_sequence_size(), 0);
+        assert_eq!(v.alt_sequence_size(), 4);
+    }
+
+    #[test]
+    fn from_parts_deletion() {
+        let v = Variant::from_parts("chr1", 100, b"ACGT".to_vec(), vec![]).unwrap();
+        assert_eq!(v.ref_sequence_size(), 4);
+        assert_eq!(v.alt_sequence_size(), 0);
+    }
+
+    #[test]
+    fn new_mismatched_regions_errors() {
+        let region1 = GenomicRegion::new("chr1", 100, 101).unwrap();
+        let region2 = GenomicRegion::new("chr1", 200, 201).unwrap();
+        let ref_allele = Allele::new(region1, b"A".to_vec());
+        let alt_allele = Allele::new(region2, b"T".to_vec());
+        assert!(Variant::new(ref_allele, alt_allele).is_err());
+    }
+
+    #[test]
+    fn is_snv_single_base_change() {
+        let v = snv("chr1", 100, b'A', b'T');
+        assert!(is_snv(&v));
+        assert!(!is_mnv(&v));
+        assert!(!is_indel(&v));
+    }
+
+    #[test]
+    fn is_mnv_multi_base_same_length() {
+        let v = indel("chr1", 100, b"ACG", b"TTT");
+        assert!(is_mnv(&v));
+        assert!(!is_snv(&v));
+        assert!(!is_indel(&v));
+    }
+
+    #[test]
+    fn insertion_has_longer_alt() {
+        let v = Variant::from_parts("chr1", 100, vec![], b"ACG".to_vec()).unwrap();
+        assert!(is_insertion(&v));
+        assert!(!is_deletion(&v));
+        assert!(is_indel(&v));
+    }
+
+    #[test]
+    fn deletion_has_longer_ref() {
+        let v = Variant::from_parts("chr1", 100, b"ACG".to_vec(), vec![]).unwrap();
+        assert!(is_deletion(&v));
+        assert!(!is_insertion(&v));
+        assert!(is_indel(&v));
+    }
+
+    #[test]
+    fn simple_insertion_has_zero_length_ref() {
+        let v = Variant::from_parts("chr1", 100, vec![], b"ACG".to_vec()).unwrap();
+        assert!(is_simple_insertion(&v));
+        assert!(!is_simple_deletion(&v));
+    }
+
+    #[test]
+    fn simple_deletion_has_zero_length_alt() {
+        let v = Variant::from_parts("chr1", 100, b"ACG".to_vec(), vec![]).unwrap();
+        assert!(is_simple_deletion(&v));
+        assert!(!is_simple_insertion(&v));
+    }
+
+    #[test]
+    fn indel_size_positive_for_insertion_negative_for_deletion() {
+        let ins = Variant::from_parts("chr1", 100, b"A".to_vec(), b"ACGT".to_vec()).unwrap();
+        assert_eq!(indel_size(&ins), 3);
+        let del = Variant::from_parts("chr1", 100, b"ACGT".to_vec(), b"A".to_vec()).unwrap();
+        assert_eq!(indel_size(&del), -3);
+        let sub = snv("chr1", 100, b'A', b'T');
+        assert_eq!(indel_size(&sub), 0);
+    }
+
+    #[test]
+    fn is_parsimonious_no_padding_bases() {
+        let v = snv("chr1", 100, b'A', b'T');
+        assert!(is_parsimonious(&v));
+    }
+
+    #[test]
+    fn is_not_parsimonious_shared_prefix() {
+        let v = indel("chr1", 100, b"GAC", b"GTC");
+        assert!(!is_parsimonious(&v));
+    }
+
+    #[test]
+    fn ordering_by_position() {
+        let a = snv("chr1", 100, b'A', b'T');
+        let b = snv("chr1", 200, b'C', b'G');
+        assert!(a < b);
+        assert!(b > a);
+    }
+
+    #[test]
+    fn ordering_same_position_by_sequence() {
+        let a = Variant::from_parts("chr1", 100, b"A".to_vec(), b"C".to_vec()).unwrap();
+        let b = Variant::from_parts("chr1", 100, b"A".to_vec(), b"T".to_vec()).unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn equality() {
+        let a = snv("chr1", 100, b'A', b'T');
+        let b = snv("chr1", 100, b'A', b'T');
+        let c = snv("chr1", 100, b'A', b'C');
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn display_format() {
+        let v = snv("chr1", 100, b'A', b'T');
+        let s = v.to_string();
+        assert!(s.contains("chr1"));
+        assert!(s.contains("A/T"));
+    }
+
+    #[test]
+    fn remove_duplicates_deduplicates_and_sorts() {
+        let mut variants = vec![
+            snv("chr1", 200, b'C', b'G'),
+            snv("chr1", 100, b'A', b'T'),
+            snv("chr1", 100, b'A', b'T'),
+        ];
+        remove_duplicates(&mut variants);
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0].mapped_region().begin(), 100);
+        assert_eq!(variants[1].mapped_region().begin(), 200);
+    }
+
+    #[test]
+    fn split_mnv_splits_into_snvs() {
+        let v = indel("chr1", 100, b"ACG", b"ATT");
+        let snvs = split_mnv(&v);
+        assert_eq!(snvs.len(), 2);
+        assert_eq!(snvs[0].ref_sequence(), b"C");
+        assert_eq!(snvs[0].alt_sequence(), b"T");
+        assert_eq!(snvs[1].ref_sequence(), b"G");
+        assert_eq!(snvs[1].alt_sequence(), b"T");
+    }
+
+    #[test]
+    fn split_non_mnv_returns_self() {
+        let v = snv("chr1", 100, b'A', b'T');
+        let result = split_mnv(&v);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], v);
+    }
+
+    #[test]
+    fn ref_and_alt_accessors() {
+        let v = snv("chr1", 50, b'G', b'C');
+        assert_eq!(v.ref_sequence_size(), 1);
+        assert_eq!(v.alt_sequence_size(), 1);
+        assert_eq!(v.ref_allele().sequence(), b"G");
+        assert_eq!(v.alt_allele().sequence(), b"C");
+    }
+}
