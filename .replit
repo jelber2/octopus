@@ -20,7 +20,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo build 2>&1"
+args = "cargo build --release 2>&1 && echo '' && echo '=== Build complete ===' && echo '' && ./target/release/octopus --help"
 
 [workflows.workflow.metadata]
 outputType = "console"
