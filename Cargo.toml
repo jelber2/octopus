@@ -1,0 +1,29 @@
+[package]
+name = "octopus"
+version = "0.7.4"
+edition = "2021"
+description = "Octopus - a mapping-based variant caller"
+license = "MIT"
+
+[[bin]]
+name = "octopus"
+path = "rust_src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+anyhow = "1"
+chrono = "0.4"
+rayon = "1"
+num-traits = "0.2"
+bitflags = "2"
+indexmap = "2"
+flate2 = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

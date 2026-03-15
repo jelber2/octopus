@@ -1,0 +1,20 @@
+os: linux
+services:
+  - docker
+sudo: required
+language: python
+
+env:
+  matrix:
+  - DOCKER_IMAGE=lasote/conanclang60
+    CC=clang
+    CXX=clang++
+  - DOCKER_IMAGE=lasote/conangcc8
+    CC=gcc
+    CXX=g++
+
+install:
+  - ./.travis/install.sh
+
+script:
+  - ./.travis/run.sh
