@@ -1,26 +1,2 @@
-modules = ["rust-stable"]
-[workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Build Octopus (Rust)"
-
-[[workflows.workflow]]
-name = "Build Octopus (Rust)"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bash scripts/build_rust.sh"
-
 [agent]
 expertMode = true
