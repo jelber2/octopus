@@ -90,12 +90,39 @@ scripts/
 | snp_heterozygosity     | 0.001    | θ for H-W SNP prior                    |
 | indel_heterozygosity   | 0.0001   | θ for H-W indel prior (stored)         |
 
+## Full Pipeline (wired)
+
+The binary now runs end-to-end:
+```
+./target/release/octopus \
+  --reference ref.fa \
+  --reads-file sample.bam \      # or --reads-file list.txt (one BAM per line)
+  --caller individual \
+  --output calls.vcf             # omit to write to stdout
+```
+
+Steps executed:
+1. Open FASTA reference (indexed via in-memory offset scan)
+2. Open BAM file(s) via `noodles-bam` — reads all primary, non-duplicate,
+   non-QC-fail records into memory; groups by sample (uses BAM filename as
+   sample name)
+3. Write VCF header (##fileformat, ##contig, ##FILTER, ##FORMAT, #CHROM line)
+4. Process each contig in 50 kb windows; for each window:
+   - Fetch reads overlapping the window
+   - Run `IndividualCaller.call_variants()` (CigarScanner → Bayesian posterior)
+   - Write VCF records with GT/GQ/DP/AD FORMAT fields
+5. Flush output; print call count to stderr
+
+`--reads-file` accepts either a BAM/CRAM file directly (detected by extension)
+or a text file listing one BAM/CRAM path per line.
+
 ## Next Steps
-- **ReadManager**: integrate `rust-htslib` for real BAM parsing
-  (`PKG_CONFIG_PATH=/nix/store/29ardlwynaqws6ay3lvwdds5wjh3h4qr-htslib-1.15/lib/pkgconfig`)
 - **Population/Trio/Cancer callers**: implement calling logic analogous to IndividualCaller
 - **HMM likelihood model**: full pair-HMM alignment for indel accuracy
-- **VCF writer**: write multi-sample VCF header + sorted records to output file
+- **Indexed BAM access**: replace full-scan loading with `.bai`-indexed region
+  queries for large (>1 Gb) genomes
+- **@RG SM: sample name extraction**: noodles-bam 0.65 `Map<ReadGroup>` API
+  doesn't expose `.sample()` directly; read via other_fields or upgrade noodles
 
 ## Session Notes
 - Files are in git but NOT on disk after a session restart.

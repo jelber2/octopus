@@ -17,6 +17,15 @@ use std::path::PathBuf;
 use std::process;
 use clap::{Parser, ArgGroup};
 
+use crate::io::reference::fasta::FastaReader;
+use crate::io::reference::reference_genome::{ReferenceGenome, get_all_contig_regions};
+use crate::io::read::read_manager::ReadManager;
+use crate::io::variant::vcf_header::VcfHeader;
+use crate::io::variant::vcf_writer::VcfWriter;
+use crate::core::callers::caller::{Caller, CallerEnvironment, CallerOptions};
+use crate::core::callers::individual_caller::IndividualCaller;
+use crate::basics::genomic_region::GenomicRegion;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Octopus — a mapping-based haplotype-aware variant caller.
@@ -81,7 +90,7 @@ struct OctopusArgs {
     #[arg(short = 'I', long, value_name = "FILE", num_args = 1..)]
     reads: Vec<PathBuf>,
 
-    /// File(s) containing lists of BAM/CRAM paths (one per line)
+    /// File(s) containing lists of BAM/CRAM paths (one per line), or BAM/CRAM files directly
     #[arg(short = 'i', long, value_name = "FILE", num_args = 1..)]
     reads_file: Vec<PathBuf>,
 
@@ -407,39 +416,131 @@ fn validate_caller_name(s: &str) -> Result<String, String> {
     }
 }
 
+// ── BAM path resolution ───────────────────────────────────────────────────────
+
+/// Resolve the final list of BAM file paths from CLI arguments.
+/// `--reads` paths are used directly.  `--reads-file` paths are either:
+///   - a BAM/CRAM file (detected by extension), used directly; or
+///   - a text file containing one BAM/CRAM path per line.
+fn resolve_bam_paths(args: &OctopusArgs) -> Result<Vec<PathBuf>, String> {
+    let mut paths: Vec<PathBuf> = args.reads.clone();
+
+    for list_path in &args.reads_file {
+        let ext = list_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+
+        if matches!(ext.as_deref(), Some("bam") | Some("cram")) {
+            paths.push(list_path.clone());
+        } else {
+            let content = std::fs::read_to_string(list_path).map_err(|e| {
+                format!("cannot read reads-file '{}': {}", list_path.display(), e)
+            })?;
+            for line in content.lines() {
+                let line = line.trim();
+                if !line.is_empty() && !line.starts_with('#') {
+                    paths.push(PathBuf::from(line));
+                }
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+// ── Windowed contig processing ────────────────────────────────────────────────
+
+/// Process one contig in non-overlapping windows of `window_size` bp.
+/// Returns the number of variant records emitted.
+fn process_contig(
+    reference: &ReferenceGenome,
+    read_manager: &ReadManager,
+    caller: &dyn Caller,
+    contig: &str,
+    contig_size: u32,
+    window_size: u32,
+    vcf_writer: &mut VcfWriter,
+) -> Result<usize, String> {
+    let mut total_calls = 0usize;
+    let mut pos = 0u32;
+
+    while pos < contig_size {
+        let win_begin = pos;
+        let win_end = (pos + window_size).min(contig_size);
+
+        let region = GenomicRegion::new(contig, win_begin, win_end)
+            .map_err(|e| format!("{}: {}..{}: {}", contig, win_begin, win_end, e))?;
+
+        let reads = read_manager.fetch(&region);
+        let has_reads = reads.values().any(|v| !v.is_empty());
+
+        if has_reads {
+            let env = CallerEnvironment {
+                reference,
+                reads,
+                region: region.clone(),
+            };
+
+            match caller.call_variants(&env) {
+                Ok(calls) => {
+                    for record in calls {
+                        vcf_writer.write_record(&record)?;
+                        total_calls += 1;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[octopus] warning: error on {}:{}-{}: {}", contig, win_begin, win_end, e);
+                }
+            }
+        }
+
+        pos = win_end;
+    }
+
+    Ok(total_calls)
+}
+
+// ── Main run logic ────────────────────────────────────────────────────────────
+
 fn run(args: OctopusArgs) -> i32 {
     if let Err(e) = validate_args(&args) {
         eprintln!("error: {}", e);
         return 1;
     }
 
-    println!("Octopus variant caller v{}", VERSION);
-    println!();
-    println!("  Reference:  {}", args.reference.display());
+    // ── Banner ────────────────────────────────────────────────────────────────
+    eprintln!("Octopus variant caller v{}", VERSION);
+    eprintln!();
+    eprintln!("  Reference:  {}", args.reference.display());
     if !args.reads.is_empty() {
-        println!("  Reads:      {}", args.reads.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
+        eprintln!(
+            "  Reads:      {}",
+            args.reads.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
     }
     if !args.reads_file.is_empty() {
-        println!("  Reads file: {}", args.reads_file.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
+        eprintln!(
+            "  Reads file: {}",
+            args.reads_file.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
     }
     if !args.regions.is_empty() {
-        println!("  Regions:    {}", args.regions.join(" "));
+        eprintln!("  Regions:    {}", args.regions.join(" "));
     }
-    println!("  Caller:     {}", args.caller);
-    println!("  Ploidy:     {}", args.organism_ploidy);
+    eprintln!("  Caller:     {}", args.caller);
+    eprintln!("  Ploidy:     {}", args.organism_ploidy);
     if let Some(ref out) = args.output {
-        println!("  Output:     {}", out.display());
+        eprintln!("  Output:     {}", out.display());
     } else {
-        println!("  Output:     stdout");
+        eprintln!("  Output:     stdout");
     }
     if let Some(threads) = args.threads {
-        if threads == 0 {
-            println!("  Threads:    unlimited");
-        } else {
-            println!("  Threads:    {}", threads);
-        }
+        eprintln!("  Threads:    {}", if threads == 0 { "unlimited".to_string() } else { threads.to_string() });
     }
+    eprintln!();
 
+    // ── Caller-specific validation ────────────────────────────────────────────
     match args.caller.as_str() {
         "cancer" => {
             if args.normal_samples.is_empty() {
@@ -456,8 +557,137 @@ fn run(args: OctopusArgs) -> i32 {
         _ => {}
     }
 
-    println!();
-    println!("NOTE: Full pipeline not yet wired — argument parsing complete.");
+    // ── Open reference genome (FASTA) ─────────────────────────────────────────
+    eprintln!("[octopus] Loading reference...");
+    let fasta_reader = match FastaReader::new(&args.reference) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: cannot open reference '{}': {}", args.reference.display(), e);
+            return 1;
+        }
+    };
+    let reference = ReferenceGenome::new(Box::new(fasta_reader));
+    eprintln!("[octopus] Reference has {} contigs.", reference.num_contigs());
+
+    // ── Resolve and open BAM files ────────────────────────────────────────────
+    let bam_paths = match resolve_bam_paths(&args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 1;
+        }
+    };
+
+    if bam_paths.is_empty() {
+        eprintln!("error: no BAM/CRAM files specified");
+        return 1;
+    }
+
+    eprintln!("[octopus] Opening {} BAM file(s)...", bam_paths.len());
+    let read_manager = match ReadManager::new(bam_paths, args.max_open_read_files) {
+        Ok(rm) => rm,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return 1;
+        }
+    };
+    eprintln!("[octopus] Samples: {:?}", read_manager.samples());
+
+    // ── Build VCF header ──────────────────────────────────────────────────────
+    let mut header = VcfHeader::new("VCFv4.3");
+    for contig in reference.contig_names() {
+        let len = reference.contig_size(contig).map(|s| s as u64);
+        header.add_contig(contig, len);
+    }
+    header.add_filter("PASS", "All filters passed");
+    header.add_format("GT", "1", "String", "Genotype");
+    header.add_format("GQ", "1", "Integer", "Genotype quality");
+    header.add_format("DP", "1", "Integer", "Total read depth at this position");
+    header.add_format("AD", "R", "Integer", "Allelic depth (ref, alt)");
+    for sample in read_manager.samples() {
+        header.add_sample(sample);
+    }
+
+    // ── Open output ───────────────────────────────────────────────────────────
+    let mut vcf_writer = match &args.output {
+        Some(path) => match VcfWriter::to_file(path) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("error: cannot create output '{}': {}", path.display(), e);
+                return 1;
+            }
+        },
+        None => VcfWriter::to_stdout(),
+    };
+
+    if let Err(e) = vcf_writer.write_header(&header) {
+        eprintln!("error: writing VCF header: {}", e);
+        return 1;
+    }
+
+    // ── Build caller ──────────────────────────────────────────────────────────
+    let options = CallerOptions {
+        min_variant_quality: args.min_variant_posterior,
+        ploidy: args.organism_ploidy as usize,
+        snp_heterozygosity: args.snp_heterozygosity,
+        indel_heterozygosity: args.indel_heterozygosity,
+        min_base_quality: args.min_pileup_base_quality,
+        ..CallerOptions::default()
+    };
+
+    let caller: Box<dyn Caller> = match args.caller.as_str() {
+        "individual" => Box::new(IndividualCaller::new(options)),
+        other => {
+            eprintln!("error: caller '{}' not yet implemented", other);
+            return 1;
+        }
+    };
+
+    // ── Process regions ───────────────────────────────────────────────────────
+    // Window size: 50 kb balances memory and throughput.
+    const WINDOW_SIZE: u32 = 50_000;
+
+    let regions_to_process: Vec<GenomicRegion> = get_all_contig_regions(&reference);
+
+    let mut total_calls = 0usize;
+    let num_contigs = regions_to_process.len();
+
+    for (idx, region) in regions_to_process.iter().enumerate() {
+        let contig = region.contig_name();
+        let contig_size = region.end();
+        eprintln!(
+            "[octopus] Processing contig {}/{}: {} ({} bp)",
+            idx + 1, num_contigs, contig, contig_size
+        );
+
+        match process_contig(
+            &reference,
+            &read_manager,
+            caller.as_ref(),
+            contig,
+            contig_size,
+            WINDOW_SIZE,
+            &mut vcf_writer,
+        ) {
+            Ok(n) => {
+                total_calls += n;
+                if n > 0 {
+                    eprintln!("[octopus]   {} variant(s) called on {}", n, contig);
+                }
+            }
+            Err(e) => {
+                eprintln!("[octopus] error on contig {}: {}", contig, e);
+            }
+        }
+    }
+
+    if let Err(e) = vcf_writer.flush() {
+        eprintln!("error: flushing VCF output: {}", e);
+        return 1;
+    }
+
+    eprintln!();
+    eprintln!("[octopus] Done. Total variant calls: {}", total_calls);
     0
 }
 
