@@ -27,6 +27,12 @@ pub struct CallerOptions {
     pub max_haplotypes: usize,
     pub min_read_depth: usize,
     pub ploidy: usize,
+    /// Minimum base quality (Phred) a base must have to be used for candidate generation.
+    pub min_base_quality: u8,
+    /// Expected germline SNP heterozygosity (θ) for Hardy-Weinberg prior.
+    pub snp_heterozygosity: f64,
+    /// Expected germline indel heterozygosity (θ) for Hardy-Weinberg prior.
+    pub indel_heterozygosity: f64,
 }
 
 impl Default for CallerOptions {
@@ -36,6 +42,9 @@ impl Default for CallerOptions {
             max_haplotypes: 128,
             min_read_depth: 1,
             ploidy: 2,
+            min_base_quality: 20,
+            snp_heterozygosity: 0.001,
+            indel_heterozygosity: 0.0001,
         }
     }
 }
